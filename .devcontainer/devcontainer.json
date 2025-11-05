@@ -1,11 +1,11 @@
 {
     "name": "aca-ghcs",
-    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
     "features": {
         "ghcr.io/devcontainers/features/azure-cli:1": {},
         "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
     },
-    "postCreateCommand": "pip install -r requirements.txt",
+    "postCreateCommand": "pip install -r requirements.txt && git config --global core.autocrlf input && git config --global core.eol lf",
     "customizations": {
         "vscode": {
             "extensions": [
