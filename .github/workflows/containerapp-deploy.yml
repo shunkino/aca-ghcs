@@ -1,0 +1,76 @@
+name: Build and Deploy Container App
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: containerapp-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_NAME: ${{ vars.REGISTRY_NAME }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Build and push container image
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            if [ -z "$REGISTRY_NAME" ] || [ -z "$IMAGE_NAME" ]; then
+              echo 'REGISTRY_NAME and IMAGE_NAME repository variables must be set.' >&2
+              exit 1
+            fi
+
+            IMAGE_TAG="${GITHUB_SHA::12}"
+            echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+            az acr build \
+              --registry "$REGISTRY_NAME" \
+              --image "${IMAGE_NAME}:${IMAGE_TAG}" \
+              --file Dockerfile \
+              .
+
+      - name: Update Azure Container App revision
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            if [ -z "$CONTAINER_APP_NAME" ] || [ -z "$RESOURCE_GROUP" ] || [ -z "$ACR_LOGIN_SERVER" ]; then
+              echo 'CONTAINER_APP_NAME, RESOURCE_GROUP, and ACR_LOGIN_SERVER repository variables must be set.' >&2
+              exit 1
+            fi
+
+            az containerapp update \
+              --name "$CONTAINER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --image "${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}" \
+              --set-env-vars "APP_VERSION=${IMAGE_TAG}"
+
+      - name: Show ingress endpoint
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az containerapp show \
+              --name "$CONTAINER_APP_NAME" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query "properties.configuration.ingress.fqdn" \
+              --output tsv

@@ -1,0 +1,17 @@
+# Python cache and build output
+__pycache__/
+*.py[cod]
+build/
+dist/
+
+# Virtual environments
+.venv/
+.env/
+
+# Tooling / editor settings
+.vscode/
+.idea/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
