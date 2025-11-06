@@ -25,6 +25,7 @@ var namingSeed = uniqueString(subscription().id, resourceGroup().name)
 var acrName = toLower(take('${replace(baseName, '-', '')}${namingSeed}', 50))
 var managedEnvName = toLower(take('${baseName}-env', 63))
 var containerAppName = toLower(take('${baseName}-app', 63))
+var acrIdentityName = toLower(take('${baseName}-acr-mi', 63))
 
 resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: acrName
@@ -34,6 +35,10 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' exist
   name: managedEnvName
 }
 
+resource acrPullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
+  name: acrIdentityName
+}
+
 var containerImageReference = '${containerRegistry.properties.loginServer}/${containerImageName}:${containerImageTag}'
 
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -41,7 +46,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   location: location
   tags: resourceTags
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${acrPullIdentity.id}': {}
+    }
   }
   properties: {
     environmentId: managedEnvironment.id
@@ -56,7 +64,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       registries: [
         {
           server: containerRegistry.properties.loginServer
-          identity: 'system'
+          identity: acrPullIdentity.id
         }
       ]
     }
@@ -93,19 +101,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
-resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(containerRegistry.id, containerApp.id, 'acrpull')
-  scope: containerRegistry
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-    )
-    principalId: containerApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
-
 @description('Container app resource name.')
 output containerAppName string = containerApp.name
 
@@ -115,5 +110,5 @@ output containerAppFqdn string = containerApp.properties.configuration.ingress.f
 @description('Default image reference configured on the container app.')
 output containerImage string = containerImageReference
 
-@description('System-assigned managed identity principal ID for the container app.')
-output containerAppPrincipalId string = containerApp.identity.principalId
+@description('User-assigned managed identity principal ID used for ACR pulls.')
+output containerAppAcrPrincipalId string = containerApp.identity.userAssignedIdentities[acrPullIdentity.id].principalId

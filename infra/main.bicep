@@ -23,6 +23,7 @@ var acrName = toLower(take('${replace(baseName, '-', '')}${namingSeed}', 50))
 var logWorkspaceName = toLower(take('${baseName}-logs', 63))
 var managedEnvName = toLower(take('${baseName}-env', 63))
 var containerAppName = toLower(take('${baseName}-app', 63))
+var acrIdentityName = toLower(take('${baseName}-acr-mi', 63))
 
 resource targetRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceGroupName
@@ -39,6 +40,7 @@ module sharedResources 'modules/baseResources.bicep' = {
     logWorkspaceName: logWorkspaceName
     containerRegistryName: acrName
     managedEnvironmentName: managedEnvName
+    acrIdentityName: acrIdentityName
   }
 }
 
@@ -65,6 +67,12 @@ output logWorkspaceId string = sharedResources.outputs.logWorkspaceId
 
 @description('Derived container app resource name.')
 output containerAppName string = containerAppName
+
+@description('User-assigned managed identity name for ACR pulls.')
+output acrIdentityName string = acrIdentityName
+
+@description('User-assigned managed identity resource ID for ACR pulls.')
+output acrIdentityId string = sharedResources.outputs.acrIdentityId
 
 @description('Resource group name created for the deployment.')
 output resourceGroupName string = resourceGroupName

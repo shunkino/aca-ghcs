@@ -15,6 +15,9 @@ param containerRegistryName string
 @description('Azure Container Apps managed environment name.')
 param managedEnvironmentName string
 
+@description('User-assigned managed identity name used for Container Apps to pull from ACR.')
+param acrIdentityName string
+
 resource logWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: logWorkspaceName
   location: location
@@ -68,6 +71,25 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
+resource acrPullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' = {
+  name: acrIdentityName
+  location: location
+  tags: resourceTags
+}
+
+resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(containerRegistry.id, acrPullIdentity.id, 'acrpull')
+  scope: containerRegistry
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
+    principalId: acrPullIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 @description('Azure Container Registry login server.')
 output acrLoginServer string = containerRegistry.properties.loginServer
 
@@ -82,3 +104,6 @@ output managedEnvironmentId string = managedEnvironment.id
 
 @description('Log Analytics workspace resource ID.')
 output logWorkspaceId string = logWorkspace.id
+
+@description('User-assigned managed identity resource ID for Container Apps image pulls.')
+output acrIdentityId string = acrPullIdentity.id

@@ -29,7 +29,7 @@ This repository provisions an Azure Container Apps environment with Bicep, build
       --name aca-ghcs-shared \
       --location eastus \
       --template-file infra/main.bicep \
-      --parameters infra/dev.bicepparam
+      --parameters infra/dev-main.bicepparam
    ```
 
 2. Build and push the application image to ACR (ensure `<acrName>` matches the output from the previous step and choose a tag value such as `initial` or the commit SHA):
