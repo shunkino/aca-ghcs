@@ -4,8 +4,10 @@ This repository provisions an Azure Container Apps environment with Bicep, build
 
 ## Contents
 
-- `infra/main.bicep` – creates an ACR instance, Log Analytics workspace, Container Apps managed environment, container app, and role assignment that grants the app access to pull images from ACR.
-- `infra/dev.bicepparam` – default parameters for a `dev` environment.
+- `infra/main.bicep` – subscription-scope template that creates the resource group, ACR instance, and supporting infrastructure.
+- `infra/containerApp.bicep` – resource-group template that deploys the Container App once an image tag is available in ACR.
+- `infra/dev.bicepparam` – default parameters for the shared infrastructure.
+- `infra/dev-containerApp.bicepparam` – default parameters for the container app deployment.
 - `src/app/main.py` – FastAPI endpoint that logs and returns the current UTC timestamp.
 - `Dockerfile` – builds the application image and exposes port 8080.
 - `.github/workflows/containerapp-deploy.yml` – GitHub Actions workflow that builds the image with `az acr build` and updates the container app revision.
@@ -18,30 +20,53 @@ This repository provisions an Azure Container Apps environment with Bicep, build
 - Bicep CLI 0.26 or newer (included with current Azure CLI).
 - Logged in via `az login` and set the target subscription (`az account set --subscription <id>`).
 
-## Provision infrastructure
+## Two-phase deployment
 
-1. Choose a resource group (create one if needed):
+1. Deploy shared infrastructure (creates the resource group, ACR, Log Analytics workspace, and managed environment):
 
-   ```pwsh
-   az group create --name rg-aca-demo --location eastus
+   ```bash
+   az deployment sub create \
+      --name aca-ghcs-shared \
+      --location eastus \
+      --template-file infra/main.bicep \
+      --parameters infra/dev.bicepparam
    ```
 
-2. Build and deploy the Bicep template. Update parameter values as needed or duplicate `infra/dev.bicepparam` for other environments.
+2. Build and push the application image to ACR (ensure `<acrName>` matches the output from the previous step and choose a tag value such as `initial` or the commit SHA):
 
-   ```pwsh
+   ```bash
+   az acr build \
+      --registry <acrName> \
+      --image timestamp-service:<tag> \
+      --file Dockerfile \
+      .
+   ```
+
+3. Deploy or update the Container App once the tag exists in ACR:
+
+   ```bash
    az deployment group create \
-     --resource-group rg-aca-demo \
-     --template-file infra/main.bicep \
-     --parameters @infra/dev.bicepparam
+      --name aca-ghcs-app-<tag> \
+      --resource-group <resourceGroupName> \
+      --template-file infra/containerApp.bicep \
+      --parameters infra/dev-containerApp.bicepparam \
+                   containerImageName=timestamp-service \
+                   containerImageTag=<tag>
    ```
 
-   Record the outputs printed at the end of the deployment (`acrName`, `acrLoginServer`, `containerAppName`, `managedEnvironmentName`, `containerAppFqdn`, `containerImage`). You will reference these values later in GitHub.
+- Capture the outputs from both deployments (for example `acrName`, `containerAppName`, `containerAppFqdn`). They are useful for CI/CD configuration and verification.
 
-> **Note**: The `containerImageTag` parameter must point at an image that exists in ACR. Run the GitHub Actions workflow once (or build locally with `az acr build`) to publish the initial tag referenced in the deployment.
+## Build and deploy the container image manually
+
+Use the same sequence whenever you need to publish a new revision manually:
+
+1. Build and push the image: `az acr build ...`
+2. Re-run the resource-group deployment with the updated `containerImageTag` value.
+3. Verify the updated endpoint at `https://<containerAppFqdn>/`.
 
 ## Configure GitHub Actions continuous deployment
 
-1. Create a service principal with Contributor access scoped to the resource group:
+1. Create a service principal with Contributor access scoped to the resource group created by the subscription deployment:
 
    ```pwsh
    az ad sp create-for-rbac \
@@ -55,18 +80,17 @@ This repository provisions an Azure Container Apps environment with Bicep, build
 
 2. In your GitHub repository, go to **Settings → Secrets and variables → Actions** and add:
 
-   - Secret `AZURE_CREDENTIALS` → paste the JSON output from the previous step.
-   - Variables (Actions → Variables → New repository variable):
-     - `REGISTRY_NAME` – value of `acrName` from the deployment output.
-     - `ACR_LOGIN_SERVER` – value of `acrLoginServer`.
-     - `CONTAINER_APP_NAME` – value of `containerAppName`.
-     - `AZURE_RESOURCE_GROUP` – the resource group name (for example `rg-aca-demo`).
-     - `IMAGE_NAME` – container repository name (`timestamp-service` unless you changed `containerImageName`).
+    - Secret `AZURE_CREDENTIALS` → paste the JSON output from the previous step.
+    - Variables (Actions → Variables → New repository variable):
+       - `REGISTRY_NAME` – value of `acrName` from the deployment output.
+       - `AZURE_RESOURCE_GROUP` – the resource group name created by the subscription deployment.
+       - `IMAGE_NAME` – container repository name (`timestamp-service` unless you changed `containerImageName`).
+       - `DEPLOYMENT_LOCATION` – region for subscription deployments (for example `eastus`).
 
 3. Trigger the workflow with **Actions → Build and Deploy Container App → Run workflow** or by pushing to `main`. Each run:
-   - Builds the Dockerfile with `az acr build` and pushes a new image tagged with the first 12 characters of the commit SHA.
-   - Updates the container app to pull the new image and sets the `APP_VERSION` environment variable to the same tag.
-   - Prints the ingress FQDN for quick verification.
+   - Builds the Dockerfile with `az acr build`, pushing a tag derived from the commit SHA.
+   - Deploys or refreshes the shared infrastructure via the subscription-scoped template.
+   - Deploys the container app with the resource-group template, wiring up the new image tag automatically and printing the ingress FQDN.
 
 When the workflow completes, browse to `https://<containerAppFqdn>/` and you should see the current UTC timestamp along with the deployment metadata in the JSON response.
 

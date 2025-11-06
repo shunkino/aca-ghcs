@@ -19,10 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REGISTRY_NAME: ${{ vars.REGISTRY_NAME }}
-      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
-      CONTAINER_APP_NAME: ${{ vars.CONTAINER_APP_NAME }}
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+      DEPLOYMENT_LOCATION: ${{ vars.DEPLOYMENT_LOCATION }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -50,25 +49,59 @@ jobs:
               --file Dockerfile \
               .
 
-      - name: Update Azure Container App revision
+      - name: Deploy shared infrastructure (subscription scope)
         uses: azure/cli@v2
         with:
           inlineScript: |
-            if [ -z "$CONTAINER_APP_NAME" ] || [ -z "$RESOURCE_GROUP" ] || [ -z "$ACR_LOGIN_SERVER" ]; then
-              echo 'CONTAINER_APP_NAME, RESOURCE_GROUP, and ACR_LOGIN_SERVER repository variables must be set.' >&2
+            if [ -z "$DEPLOYMENT_LOCATION" ]; then
+              echo 'DEPLOYMENT_LOCATION repository variable must be set.' >&2
               exit 1
             fi
 
-            az containerapp update \
-              --name "$CONTAINER_APP_NAME" \
+            az deployment sub create \
+              --name "aca-ghcs-shared" \
+              --location "$DEPLOYMENT_LOCATION" \
+              --template-file infra/main.bicep \
+              --parameters @infra/dev.bicepparam \
+                           resourceGroupName="$RESOURCE_GROUP"
+
+      - name: Deploy container app (resource-group scope)
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            if [ -z "$RESOURCE_GROUP" ]; then
+              echo 'AZURE_RESOURCE_GROUP repository variable must be set.' >&2
+              exit 1
+            fi
+
+            az deployment group create \
+              --name "aca-ghcs-app-${IMAGE_TAG}" \
               --resource-group "$RESOURCE_GROUP" \
-              --image "${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}" \
-              --set-env-vars "APP_VERSION=${IMAGE_TAG}"
+              --template-file infra/containerApp.bicep \
+              --parameters @infra/dev-containerApp.bicepparam \
+                           containerImageTag="$IMAGE_TAG" \
+                           containerImageName="$IMAGE_NAME"
 
       - name: Show ingress endpoint
         uses: azure/cli@v2
         with:
           inlineScript: |
+            if [ -z "$RESOURCE_GROUP" ]; then
+              echo 'AZURE_RESOURCE_GROUP repository variable must be set.' >&2
+              exit 1
+            fi
+
+            CONTAINER_APP_NAME=$(az deployment group show \
+              --name "aca-ghcs-app-${IMAGE_TAG}" \
+              --resource-group "$RESOURCE_GROUP" \
+              --query 'properties.outputs.containerAppName.value' \
+              --output tsv)
+
+            if [ -z "$CONTAINER_APP_NAME" ]; then
+              echo 'Failed to resolve container app name from deployment outputs.' >&2
+              exit 1
+            fi
+
             az containerapp show \
               --name "$CONTAINER_APP_NAME" \
               --resource-group "$RESOURCE_GROUP" \

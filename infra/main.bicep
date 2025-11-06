@@ -1,175 +1,70 @@
+targetScope = 'subscription'
+
 @description('Project prefix used to build resource names.')
 param projectName string = 'aca-ghcs'
 
 @description('Logical environment name (for example dev, qa, prod).')
 param targetEnv string = 'dev'
 
-@description('Azure region for all resources.')
-param location string = resourceGroup().location
+@description('Azure region used for the new resource group and its resources.')
+param location string = deployment().location
 
-@description('Name of the container repository that holds the application image inside ACR.')
-param containerImageName string = 'timestamp-service'
-
-@description('Image tag to set on the container app after deployment. Ensure this tag exists in the registry before running the template.')
-param containerImageTag string = 'initial'
+@description('Name of the resource group to create before deploying resources.')
+param resourceGroupName string = '${projectName}-${targetEnv}-rg'
 
 @description('Tags applied to every resource in this deployment.')
 param resourceTags object = {}
 
-var sanitizedProject = toLower(replace(projectName, ' ', ''))
-var sanitizedEnv = toLower(replace(targetEnv, ' ', ''))
-var envSegment = empty(sanitizedEnv) ? 'env' : sanitizedEnv
-var baseSegment = empty(sanitizedProject) ? 'aca' : sanitizedProject
-var baseName = replace('${baseSegment}-${envSegment}', '--', '-')
-var namingSeed = uniqueString(resourceGroup().id, projectName, targetEnv)
-var acrPrefix = toLower(take(replace('${baseSegment}${envSegment}', '-', ''), 10))
-var acrName = toLower(take('${acrPrefix}${namingSeed}', 50))
+var projectSegment = empty(trim(projectName)) ? 'aca' : toLower(replace(projectName, ' ', ''))
+var envSegment = empty(trim(targetEnv)) ? 'env' : toLower(replace(targetEnv, ' ', ''))
+var baseName = toLower(replace('${projectSegment}-${envSegment}', '--', '-'))
+var namingSeed = uniqueString(subscription().id, resourceGroupName)
+var acrName = toLower(take('${replace(baseName, '-', '')}${namingSeed}', 50))
 var logWorkspaceName = toLower(take('${baseName}-logs', 63))
 var managedEnvName = toLower(take('${baseName}-env', 63))
 var containerAppName = toLower(take('${baseName}-app', 63))
 
-resource logWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
-  name: logWorkspaceName
+resource targetRg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
+  name: resourceGroupName
   location: location
   tags: resourceTags
-  properties: {
-    retentionInDays: 30
-    features: {
-      enableLogAccessUsingOnlyResourcePermissions: true
-    }
-    sku: {
-      name: 'PerGB2018'
-    }
-  }
 }
 
-var logWorkspaceKeys = listKeys(logWorkspace.id, '2020-08-01')
-
-resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
-  name: acrName
-  location: location
-  tags: resourceTags
-  sku: {
-    name: 'Standard'
-  }
-  properties: {
-    adminUserEnabled: false
-    policies: {
-      quarantinePolicy: {
-        status: 'disabled'
-      }
-      trustPolicy: {
-        type: 'Notary'
-        status: 'disabled'
-      }
-    }
-  }
-}
-
-resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
-  name: managedEnvName
-  location: location
-  tags: resourceTags
-  properties: {
-    appLogsConfiguration: {
-      destination: 'log-analytics'
-      logAnalyticsConfiguration: {
-        customerId: logWorkspace.properties.customerId
-        sharedKey: logWorkspaceKeys.primarySharedKey
-      }
-    }
-  }
-}
-
-var containerImageReference = '${containerRegistry.properties.loginServer}/${containerImageName}:${containerImageTag}'
-
-resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
-  name: containerAppName
-  location: location
-  tags: resourceTags
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {
-    environmentId: managedEnvironment.id
-    configuration: {
-      activeRevisionsMode: 'Single'
-      ingress: {
-        external: true
-        targetPort: 8080
-        transport: 'auto'
-        allowInsecure: false
-      }
-      registries: [
-        {
-          server: containerRegistry.properties.loginServer
-          identity: 'system'
-        }
-      ]
-    }
-    template: {
-      containers: [
-        {
-          name: 'app'
-          image: containerImageReference
-          env: [
-            {
-              name: 'APP_NAME'
-              value: projectName
-            }
-            {
-              name: 'APP_ENVIRONMENT'
-              value: targetEnv
-            }
-            {
-              name: 'APP_VERSION'
-              value: containerImageTag
-            }
-          ]
-          resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
-          }
-        }
-      ]
-      scale: {
-        minReplicas: 1
-        maxReplicas: 3
-      }
-    }
-  }
-}
-
-resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(containerRegistry.id, containerApp.name, 'acrpull')
-  scope: containerRegistry
-  properties: {
-    roleDefinitionId: subscriptionResourceId(
-      'Microsoft.Authorization/roleDefinitions',
-      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-    )
-    principalId: containerApp.identity.principalId
-    principalType: 'ServicePrincipal'
+module sharedResources 'modules/baseResources.bicep' = {
+  name: 'sharedResources'
+  scope: targetRg
+  params: {
+    location: location
+    resourceTags: resourceTags
+    logWorkspaceName: logWorkspaceName
+    containerRegistryName: acrName
+    managedEnvironmentName: managedEnvName
   }
 }
 
 @description('Deployed Azure Container Registry name.')
-output acrName string = containerRegistry.name
+output acrName string = acrName
 
 @description('Azure Container Registry login server.')
-output acrLoginServer string = containerRegistry.properties.loginServer
+output acrLoginServer string = sharedResources.outputs.acrLoginServer
+
+@description('Azure Container Registry resource ID.')
+output containerRegistryId string = sharedResources.outputs.containerRegistryId
 
 @description('Azure Container Apps managed environment name.')
-output managedEnvironmentName string = managedEnvironment.name
+output managedEnvironmentName string = sharedResources.outputs.managedEnvironmentName
 
-@description('Container app resource name.')
-output containerAppName string = containerApp.name
+@description('Azure Container Apps managed environment resource ID.')
+output managedEnvironmentId string = sharedResources.outputs.managedEnvironmentId
 
-@description('Fully qualified domain name for ingress.')
-output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
+@description('Log Analytics workspace name.')
+output logWorkspaceName string = logWorkspaceName
 
-@description('Default image reference configured on the container app.')
-output containerImage string = containerImageReference
+@description('Log Analytics workspace resource ID.')
+output logWorkspaceId string = sharedResources.outputs.logWorkspaceId
 
-@description('System-assigned managed identity principal ID for the container app.')
-output containerAppPrincipalId string = containerApp.identity.principalId
+@description('Derived container app resource name.')
+output containerAppName string = containerAppName
+
+@description('Resource group name created for the deployment.')
+output resourceGroupName string = resourceGroupName
