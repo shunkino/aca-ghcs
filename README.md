@@ -68,7 +68,7 @@ Use the same sequence whenever you need to publish a new revision manually:
 
 1. Create a service principal with Contributor access scoped to the resource group created by the subscription deployment:
 
-   ```pwsh
+   ```bash
    az ad sp create-for-rbac \
      --name aca-ghcs-sp \
      --role contributor \
@@ -99,7 +99,8 @@ When the workflow completes, browse to `https://<containerAppFqdn>/` and you sho
 1. Open the repository in VS Code and run **Dev Containers: Reopen in Container** (or open in GitHub Codespaces).
 2. The `postCreateCommand` installs project Python dependencies automatically. Start the app locally with:
 
-   ```pwsh
+   ```bash
+   export PYTHONPATH=$PWD/src
    uvicorn app.main:app --host 0.0.0.0 --port 8080
    ```
 
@@ -109,7 +110,7 @@ When the workflow completes, browse to `https://<containerAppFqdn>/` and you sho
 
 Delete the resource group when finished to prevent additional charges:
 
-```pwsh
+```bash
 az group delete --name rg-aca-demo --yes --no-wait
 ```
 
