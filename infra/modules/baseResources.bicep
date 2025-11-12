@@ -16,7 +16,9 @@ param containerRegistryName string
 param managedEnvironmentName string
 
 @description('User-assigned managed identity name used for Container Apps to pull from ACR.')
-param acrIdentityName string
+param acrIdentityName string = ''
+
+var deployIdentity = !empty(trim(acrIdentityName))
 
 resource logWorkspace 'Microsoft.OperationalInsights/workspaces@2022-10-01' = {
   name: logWorkspaceName
@@ -71,21 +73,29 @@ resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   }
 }
 
-resource acrPullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' = {
+resource acrPullIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2018-11-30' = if (deployIdentity) {
   name: acrIdentityName
   location: location
   tags: resourceTags
 }
 
-resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(containerRegistry.id, acrPullIdentity.id, 'acrpull')
+resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployIdentity) {
+  name: guid(
+    containerRegistry.id,
+    resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', acrIdentityName),
+    'acrpull'
+  )
   scope: containerRegistry
   properties: {
     roleDefinitionId: subscriptionResourceId(
       'Microsoft.Authorization/roleDefinitions',
       '7f951dda-4ed3-4680-a7ca-43fe172d538d'
     )
-    principalId: acrPullIdentity.properties.principalId
+    principalId: reference(
+      resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', acrIdentityName),
+      '2018-11-30',
+      'full'
+    ).properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
@@ -106,4 +116,6 @@ output managedEnvironmentId string = managedEnvironment.id
 output logWorkspaceId string = logWorkspace.id
 
 @description('User-assigned managed identity resource ID for Container Apps image pulls.')
-output acrIdentityId string = acrPullIdentity.id
+output acrIdentityId string = deployIdentity
+  ? resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', acrIdentityName)
+  : ''
