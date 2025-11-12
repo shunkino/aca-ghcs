@@ -1,0 +1,182 @@
+openapi: 3.0.3
+info:
+  title: Engineer Progress Service API
+  version: 1.0.0
+  description: |
+    REST endpoints supporting daily progress submission, retrieval, and GitHub aggregation triggers
+    for indexing into Azure AI Search.
+servers:
+  - url: https://{containerapp_host}
+    variables:
+      containerapp_host:
+        default: localhost
+paths:
+  /api/v1/progress:
+    post:
+      summary: Submit a daily progress report
+      operationId: createProgressEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DailyProgressPayload'
+      responses:
+        '202':
+          description: Accepted for ingestion
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgressAcceptedResponse'
+        '400':
+          description: Validation failed
+        '401':
+          description: Authentication required
+  /api/v1/progress/{engineerId}:
+    get:
+      summary: Retrieve progress entries for an engineer within a date range
+      operationId: listProgressEntries
+      parameters:
+        - in: path
+          name: engineerId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: startDate
+          required: true
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: endDate
+          required: true
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Matching progress documents
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProgressQueryResponse'
+        '401':
+          description: Authentication required
+  /internal/v1/github-sync:
+    post:
+      summary: Trigger GitHub aggregation for an engineer (scheduler hook)
+      operationId: triggerGithubSync
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GithubSyncRequest'
+      responses:
+        '202':
+          description: Sync scheduled
+        '400':
+          description: Validation failed
+        '401':
+          description: Unauthorized internal caller
+components:
+  schemas:
+    DailyProgressPayload:
+      type: object
+      required:
+        - engineerId
+        - date
+        - reportText
+      properties:
+        engineerId:
+          type: string
+        date:
+          type: string
+          format: date
+        reportText:
+          type: string
+        selfReportedMood:
+          type: string
+          enum: [energized, steady, stressed, burned_out]
+        workloadScore:
+          type: integer
+          minimum: 0
+          maximum: 10
+        focusAreas:
+          type: array
+          items:
+            type: string
+    ProgressAcceptedResponse:
+      type: object
+      properties:
+        entryId:
+          type: string
+        ingestionState:
+          type: string
+          enum: [pending, indexed, retrying]
+    ProgressQueryResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProgressDocument'
+    ProgressDocument:
+      type: object
+      properties:
+        entryId:
+          type: string
+        date:
+          type: string
+          format: date
+        reportText:
+          type: string
+        selfReportedMood:
+          type: string
+        workloadScore:
+          type: integer
+        focusAreas:
+          type: array
+          items:
+            type: string
+        githubActivity:
+          $ref: '#/components/schemas/GithubActivity'
+        aiTags:
+          type: array
+          items:
+            type: string
+    GithubActivity:
+      type: object
+      properties:
+        commitCount:
+          type: integer
+        pushCount:
+          type: integer
+        repositories:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              commits:
+                type: integer
+        notableCommits:
+          type: array
+          items:
+            type: string
+    GithubSyncRequest:
+      type: object
+      required:
+        - engineerId
+        - date
+      properties:
+        engineerId:
+          type: string
+        date:
+          type: string
+          format: date
+        forceRefresh:
+          type: boolean
+          default: false
